@@ -8,6 +8,8 @@ const nodemailer = require('nodemailer');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const xss = require('xss');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -30,18 +32,57 @@ function sanitizeInput(input) {
 }
 
 // Set up SQLite database
-const db = new sqlite3.Database('./form_submissions.db', (err) => {
-    if (err) {
-        console.error('Error opening database', err);
-    } else {
-        console.log('Connected to the SQLite database.');
-        db.run(`CREATE TABLE IF NOT EXISTS submissions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            email TEXT,
-            message TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )`);
+const dbPath = path.join(__dirname, 'form_submissions.db');
+let db;
+
+function setupDatabase() {
+    return new Promise((resolve, reject) => {
+        db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+            if (err) {
+                console.error('Error opening database', err);
+                reject(err);
+            } else {
+                console.log('Connected to the SQLite database.');
+                db.run(`CREATE TABLE IF NOT EXISTS submissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    email TEXT,
+                    message TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )`, (err) => {
+                    if (err) {
+                        console.error('Error creating table:', err);
+                        reject(err);
+                    } else {
+                        resolve();
+                    }
+                });
+            }
+        });
+    });
+}
+
+setupDatabase()
+    .then(() => {
+        // Start the server only after the database is set up
+        app.listen(port, '0.0.0.0', () => {
+            console.log(`Server running on port ${port}`);
+        });
+    })
+    .catch((err) => {
+        console.error('Failed to set up database:', err);
+        process.exit(1);
+    });
+
+// Add error handler for the database
+db.on('error', (err) => {
+    console.error('Database error:', err);
+    if (err.code === 'SQLITE_CORRUPT') {
+        console.log('Database corruption detected. Attempting to recreate...');
+        db.close();
+        fs.unlinkSync('./form_submissions.db');
+        console.log('Deleted corrupted database. Restarting server...');
+        process.exit(1); // Exit the process to allow for a restart
     }
 });
 
